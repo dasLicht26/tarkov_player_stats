@@ -68,6 +68,11 @@ def download_and_store_data(url, db_name):
     conn.commit()
     conn.close()
 
+# Funktion zum Überprüfen, ob das Profil eines Spielers bereits gespeichert ist
+def profile_exists(cursor, player_id):
+    cursor.execute("SELECT 1 FROM player_profiles WHERE id = ?", (player_id,))
+    return cursor.fetchone() is not None
+
 # Funktion zum Herunterladen und Speichern der Spielerprofile
 def fetch_and_store_profiles(db_name):
     conn = sqlite3.connect(db_name)
@@ -77,8 +82,13 @@ def fetch_and_store_profiles(db_name):
     player_ids = cursor.fetchall()
     
     for (player_id,) in player_ids:
+        if profile_exists(cursor, player_id):
+            print(f"Profil für Spieler {player_id} existiert bereits, überspringe...")
+            continue
+        
         profile_url = f"https://players.tarkov.dev/profile/{player_id}.json"
         response = requests.get(profile_url)
+        
         if response.status_code == 200:
             profile_data = response.json()
             info = profile_data.get('info', {})
@@ -93,8 +103,7 @@ def fetch_and_store_profiles(db_name):
                         if item['Key'] == keys:
                             return item['Value']
                     return None
-                except TypeError:
-                    print(player_id)
+                except TypeError: # Wenn stats None ist
                     return None
 
             # Einträge extrahieren oder auf None setzen, wenn sie nicht existieren
@@ -132,8 +141,12 @@ def fetch_and_store_profiles(db_name):
                 total_game_time, sessions_pmc, sessions_scav, kills_pmc, kills_scav, deaths_pmc, deaths_scav,
                 survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated
             ))
+            
+            conn.commit()
+            print(f"Profil für Spieler {player_id} erfolgreich gespeichert.")
+        else:
+            print(f"Fehler beim Abrufen des Profils für Spieler {player_id}. HTTP-Status: {response.status_code}")
     
-    conn.commit()
     conn.close()
 
 # Überprüfen, ob die Datenbank existiert, wenn nicht, wird sie erstellt
@@ -141,7 +154,7 @@ if not os.path.exists(db_name):
     create_database(db_name)
 
 # JSON-Daten herunterladen und speichern
-download_and_store_data(url_index, db_name)
+# download_and_store_data(url_index, db_name)
 
 # Spielerprofile abrufen und speichern
 fetch_and_store_profiles(db_name)
