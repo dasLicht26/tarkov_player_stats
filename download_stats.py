@@ -44,6 +44,7 @@ def create_database(db_name):
             longest_win_streak_pmc INTEGER,
             longest_win_streak_scav INTEGER,
             updated TIMESTAMP,
+            is_banned BOOLEAN,
             FOREIGN KEY(id) REFERENCES players(id)
         )
     ''')
@@ -114,6 +115,7 @@ def fetch_and_store_profiles(db_name):
             pmc_stats = profile_data.get('pmcStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
             scav_stats = profile_data.get('scavStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
             achievements = profile_data.get('achievements', {})
+            is_banned = profile_data.get('isBanned', False)  # Abfragen des Bannstatus
 
             # Erstellen einer Hilfsfunktion zum Extrahieren von Statistiken
             def get_stat(stats, keys):
@@ -150,12 +152,12 @@ def fetch_and_store_profiles(db_name):
                 INSERT OR REPLACE INTO player_profiles (
                     id, nickname, side, experience, member_category, selected_member_category, achievements_count,
                     total_game_time, sessions_pmc, sessions_scav, kills_pmc, kills_scav, deaths_pmc, deaths_scav,
-                    survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated, is_banned
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 player_id, nickname, side, experience, member_category, selected_member_category, achievements_count,
                 total_game_time, sessions_pmc, sessions_scav, kills_pmc, kills_scav, deaths_pmc, deaths_scav,
-                survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated
+                survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated, is_banned
             ))
             
             conn.commit()
@@ -170,7 +172,7 @@ if not os.path.exists(db_name):
     create_database(db_name)
 
 # JSON-Daten herunterladen und speichern
-# download_and_store_data(url_index, db_name)
+download_and_store_data(url_index, db_name)
 
 # Spielerprofile abrufen und speichern
 fetch_and_store_profiles(db_name)
