@@ -30,28 +30,32 @@ df = pd.read_sql_query(query, conn, params=(date_threshold.timestamp() * 1000,))
 
 conn.close()
 
+# Anzahl der Accounts, die die Bedingungen erfüllen
+account_count = len(df)
+print(f"Anzahl der Accounts, die die Bedingungen erfüllen: {account_count}")
+
 # K/D Ratio berechnen
 df['kd_ratio'] = df['kills_pmc'] / df['deaths_pmc']
 
-account_count = len(df)
-print(f"Anzahl der Accounts, die die Bedingungen erfüllen: {account_count}")
+# K/D Ratios sortieren für das Liniendiagramm
+kd_sorted = df['kd_ratio'].sort_values()
 
 # Statistiken berechnen
 kd_mean = df['kd_ratio'].mean()
 kd_std = df['kd_ratio'].std()
 
 # Daten für die Gaußsche Glockenkurve vorbereiten
-x_values = np.linspace(df['kd_ratio'].min(), df['kd_ratio'].max(), 1000)
+x_values = np.linspace(kd_sorted.min(), kd_sorted.max(), 1000)
 gauss_curve = norm.pdf(x_values, kd_mean, kd_std)
 
 # Grafik erstellen
 plt.figure(figsize=(10, 6))
 
-# Histogramm der K/D Ratio
-plt.hist(df['kd_ratio'], bins=30, density=True, alpha=0.6, color='b')
+# Liniendiagramm der K/D Ratio
+plt.plot(kd_sorted.values, np.linspace(0, 1, len(kd_sorted)), 'b-', label='K/D Ratio')
 
 # Gaußsche Glockenkurve hinzufügen
-plt.plot(x_values, gauss_curve, 'r-', linewidth=2, label='Normalverteilung')
+plt.plot(x_values, gauss_curve / gauss_curve.max(), 'r-', linewidth=2, label='Normalverteilung')
 
 # Titel und Achsenbeschriftungen
 plt.title('Verteilung der K/D Ratio mit Gaußscher Glocke')
