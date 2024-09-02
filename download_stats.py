@@ -1,6 +1,7 @@
 import requests
 import sqlite3
 import os
+import zlib
 
 # URL der JSON-Daten
 url_index = "https://players.tarkov.dev/profile/index.json"
@@ -87,10 +88,28 @@ def fetch_and_store_profiles(db_name):
             continue
         
         profile_url = f"https://players.tarkov.dev/profile/{player_id}.json"
-        response = requests.get(profile_url)
+        
+        try:
+            response = requests.get(profile_url, headers={"Accept-Encoding": "identity"})
+        except requests.exceptions.RequestException as e:
+            print(f"Fehler beim Abrufen des Profils für Spieler {player_id}: {e}")
+            continue
         
         if response.status_code == 200:
-            profile_data = response.json()
+            try:
+                # Manuelle Dekomprimierung falls notwendig
+                if response.headers.get('Content-Encoding') == 'gzip':
+                    profile_data = zlib.decompress(response.content, zlib.MAX_WBITS|16)
+                    profile_data = profile_data.decode('utf-8')
+                else:
+                    profile_data = response.text
+
+                profile_data = response.json()
+
+            except (zlib.error, ValueError) as e:
+                print(f"Fehler beim Dekomprimieren oder Dekodieren der Daten für Spieler {player_id}: {e}")
+                continue
+
             info = profile_data.get('info', {})
             pmc_stats = profile_data.get('pmcStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
             scav_stats = profile_data.get('scavStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
@@ -112,10 +131,7 @@ def fetch_and_store_profiles(db_name):
             experience = info.get('experience')
             member_category = info.get('memberCategory')
             selected_member_category = info.get('selectedMemberCategory')
-            if achievements is None:
-                achievements_count = 0
-            else:
-                achievements_count = len(achievements)
+            achievements_count = len(achievements) if achievements is not None else 0
             total_game_time = profile_data.get('pmcStats', {}).get('eft', {}).get('totalInGameTime')
             sessions_pmc = get_stat(pmc_stats, ['Sessions', 'Pmc'])
             sessions_scav = get_stat(scav_stats, ['Sessions', 'Scav'])
