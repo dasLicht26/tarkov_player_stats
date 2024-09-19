@@ -14,7 +14,7 @@ cursor = conn.cursor()
 
 # SQL-Abfrage für Profile, die nach dem 16.08.2024 aktualisiert wurden und Kills/Deaths beinhalten
 query = '''
-SELECT kills_pmc, deaths_pmc, total_game_time
+SELECT kills_pmc, deaths_pmc, total_game_time, is_banned
 FROM player_profiles
 WHERE updated > ?
 AND kills_pmc IS NOT NULL
@@ -33,68 +33,68 @@ conn.close()
 # Umwandlung von total_game_time in Tage
 df['account_age_days'] = df['total_game_time'] / (60 * 60 * 24)
 
-# Aufteilen in zwei Gruppen: Neuer als 100 Tage und älter als 100 Tage
-new_accounts = df[df['account_age_days'] <= 100]
-old_accounts = df[df['account_age_days'] > 100]
+# Aufteilen in zwei Gruppen: Neuer als 50 Tage und älter als 50 Tage
+new_accounts = df[(df['account_age_days'] <= 50) & (df['is_banned'] == 0)]
+old_accounts = df[(df['account_age_days'] > 50) & (df['is_banned'] == 0)]
+banned_accounts = df[df['is_banned'] == 1] if 'is_banned' in df.columns and df['is_banned'].notna().any() else pd.DataFrame()
 
-# Funktion zum Erstellen einer Grafik für eine bestimmte Gruppe
-def create_kd_plot(df, title_suffix):
+# Funktion zum Erstellen der Kurven für eine bestimmte Gruppe
+def create_kd_curve(df, label, color):
     if df.empty:
-        print(f"Keine Daten für {title_suffix}")
-        return
+        return 0, 0, 0, 0
     
-    account_count = len(df)
     df['kd_ratio'] = df['kills_pmc'] / df['deaths_pmc']
     
-    kd_mean = df['kd_ratio'].mean()
+    # Ausrichtung der Gaußschen Normalverteilung am Peak der K/D-Ratio
+    kd_mode = df['kd_ratio'].mode().iloc[0]  # Peak bestimmen
     kd_std = df['kd_ratio'].std()
     
-    # Wahrscheinlichkeit für bestimmte K/D-Werte berechnen
-    prob_kd_10 = 1 - norm.cdf(10, kd_mean, kd_std)
-    prob_kd_15 = 1 - norm.cdf(15, kd_mean, kd_std)
-    prob_kd_25 = 1 - norm.cdf(25, kd_mean, kd_std)
-    prob_kd_30 = 1 - norm.cdf(30, kd_mean, kd_std)
-    prob_kd_less_1 = norm.cdf(1, kd_mean, kd_std)
+    # Wahrscheinlichkeit für K/D > 15 berechnen
+    prob_kd_15 = 1 - norm.cdf(15, kd_mode, kd_std)
     
-    # Anzahl der Spieler, die in diese K/D-Bereiche fallen
-    num_kd_10 = df[df['kd_ratio'] > 10].shape[0]
+    # Anzahl der Spieler, die in diesen K/D-Bereich fallen
     num_kd_15 = df[df['kd_ratio'] > 15].shape[0]
-    num_kd_25 = df[df['kd_ratio'] > 25].shape[0]
-    num_kd_30 = df[df['kd_ratio'] > 30].shape[0]
-    num_kd_less_1 = df[df['kd_ratio'] < 1].shape[0]
+    
+    # Erwartete Anzahl von Spielern über K/D 15 nach der Gaußschen Verteilung
+    expected_kd_15 = prob_kd_15 * len(df)
     
     x_values = np.linspace(df['kd_ratio'].min(), df['kd_ratio'].max(), 1000)
-    gauss_curve = norm.pdf(x_values, kd_mean, kd_std)
+    gauss_curve = norm.pdf(x_values, kd_mode, kd_std)
     
-    plt.figure(figsize=(12, 8))
+    # Dichtekurve der K/D-Ratio
+    df['kd_ratio'].plot(kind='density', linewidth=2, label=f'{label} (Tatsächlich)', color=color)
     
-    density = df['kd_ratio'].plot(kind='density', linewidth=2, label='K/D Ratio Dichte')
-    plt.plot(x_values, gauss_curve, 'r-', linewidth=2, label='Normalverteilung')
+    # Gaußsche Normalverteilung am Peak
+    plt.plot(x_values, gauss_curve, linestyle='--', linewidth=2, label=f'{label} (Gauß)', color=color)
     
-    # Titel und Informationen über der Grafik anzeigen
-    plt.title(f'Verteilung der K/D Ratio mit Gaußscher Glocke ({title_suffix})\n'
-              f'Anzahl der Profile: {account_count}\n'
-              f'Wahrscheinlichkeit K/D > 10: {prob_kd_10:.4%} ({num_kd_10} Spieler)\n'
-              f'Wahrscheinlichkeit K/D > 15: {prob_kd_15:.4%} ({num_kd_15} Spieler)\n'
-              #f'Wahrscheinlichkeit K/D > 25: {prob_kd_25:.4%} ({num_kd_25} Spieler)\n'
-              #f'Wahrscheinlichkeit K/D > 30: {prob_kd_30:.4%} ({num_kd_30} Spieler)\n'
-              f'Wahrscheinlichkeit K/D < 1: {prob_kd_less_1:.4%} ({num_kd_less_1} Spieler)\n')
-    
-    plt.xlabel('K/D Ratio')
-    plt.ylabel('Dichte')
-    
-    kd_ranges = [(0, 1), (1, 2), (2, 3), (3, 5), (5, 10), (10, 20), (20, df['kd_ratio'].max())]
-    counts = [(df['kd_ratio'].between(r[0], r[1])).sum() for r in kd_ranges]
-    
-    for i, (r, count) in enumerate(zip(kd_ranges, counts)):
-        plt.text(df['kd_ratio'].max() * 0.8, 0.9 - i * 0.05, f'{r[0]} <= K/D < {r[1]}: {count} Spieler', fontsize=10)
-    
-    plt.legend()
-    plt.xlim(left=0, right=df['kd_ratio'].max() * 1.1)
-    
-    plt.show()
+    return num_kd_15, expected_kd_15, len(df), df['kd_ratio'].max()
 
-# Erstellen der drei Grafiken
-create_kd_plot(new_accounts, "Accounts neuer als 100 Tage")
-create_kd_plot(old_accounts, "Accounts älter als 100 Tage")
-create_kd_plot(df, "Alle Accounts (kombiniert)")
+# Erstellen der Grafik
+plt.figure(figsize=(12, 8))
+
+# Kurven für neue, alte und gebannte Accounts erstellen
+new_kd_15, new_expected_kd_15, new_count, new_max_kd = create_kd_curve(new_accounts, "Neue Accounts (< 50 Tage)", "blue")
+old_kd_15, old_expected_kd_15, old_count, old_max_kd = create_kd_curve(old_accounts, "Alte Accounts (> 50 Tage)", "green")
+banned_kd_15, banned_expected_kd_15, banned_count, banned_max_kd = create_kd_curve(banned_accounts, "Gesperrte Accounts", "red")
+
+# Zusammenfassen der Informationen im Titel
+total_count = new_count + old_count + banned_count
+total_kd_15 = new_kd_15 + old_kd_15 + banned_kd_15
+total_expected_kd_15 = new_expected_kd_15 + old_expected_kd_15 + banned_expected_kd_15
+
+plt.title(f'Verteilung der K/D Ratio mit Gaußscher Glocke (Gesamt)\n'
+          f'Anzahl der Profile: {total_count}\n'
+          f'Tatsächliche Anzahl Spieler mit K/D > 15: {total_kd_15}\n'
+          f'Erwartete Anzahl Spieler mit K/D > 15 (laut Gauß): {total_expected_kd_15:.2f}')
+
+plt.xlabel('K/D Ratio')
+plt.ylabel('Dichte')
+
+plt.legend()
+
+# Bestimme das Maximum für die x-Achse nur, wenn Daten vorhanden sind
+max_kd_ratio = max(new_max_kd, old_max_kd, banned_max_kd)
+if max_kd_ratio > 0:
+    plt.xlim(left=0, right=max_kd_ratio * 1.1)
+
+plt.show()

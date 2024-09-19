@@ -172,7 +172,7 @@ if not os.path.exists(db_name):
     create_database(db_name)
 
 # JSON-Daten herunterladen und speichern
-download_and_store_data(url_index, db_name)
+# download_and_store_data(url_index, db_name)
 
 # Spielerprofile abrufen und speichern
 fetch_and_store_profiles(db_name)
