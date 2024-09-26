@@ -1,99 +1,97 @@
 import requests
 import sqlite3
-import os
 import zlib
-
+import datetime
+import ctypes
 # URL der JSON-Daten
 url_index = "https://players.tarkov.dev/profile/index.json"
+conn = sqlite3.connect(r'C:\Users\PaulGustavLehmann\AppData\Local\projects\other\large_data_test\large_data.db')
+cursor = conn.cursor()
 
 # Name der SQLite-Datenbank
 db_name = "tarkov_players.db"
 
-# Funktion zum Erstellen der Datenbank und Tabellen
-def create_database(db_name):
-    conn = sqlite3.connect(db_name)
-    cursor = conn.cursor()
-    
-    # Tabelle für die Spielerliste erstellen, falls sie nicht existiert
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS players (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL
-        )
-    ''')
-    
-    # Tabelle für die Spielerprofile erstellen, falls sie nicht existiert
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS player_profiles (
-            id INTEGER PRIMARY KEY,
-            nickname TEXT,
-            side TEXT,
-            experience INTEGER,
-            member_category INTEGER,
-            selected_member_category INTEGER,
-            achievements_count INTEGER,
-            total_game_time INTEGER,
-            sessions_pmc INTEGER,
-            sessions_scav INTEGER,
-            kills_pmc INTEGER,
-            kills_scav INTEGER,
-            deaths_pmc INTEGER,
-            deaths_scav INTEGER,
-            survived_pmc INTEGER,
-            survived_scav INTEGER,
-            longest_win_streak_pmc INTEGER,
-            longest_win_streak_scav INTEGER,
-            updated TIMESTAMP,
-            is_banned BOOLEAN,
-            FOREIGN KEY(id) REFERENCES players(id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+def get_timestamp_ms_to_s(time_ms):
+
+    # Schritt 1: Konvertiere Millisekunden in Sekunden
+    if len(str(time_ms)) == 10:
+        # Zeitstempel ist bereits in Sekunden
+        timestamp_in_seconds = time_ms
+    else:
+        timestamp_in_seconds = time_ms / 1000
+
+    # Schritt 2: Erstelle ein datetime-Objekt
+    dt = datetime.datetime.fromtimestamp(timestamp_in_seconds)
+
+    # Schritt 3: Überprüfe, ob die Uhrzeit bereits auf Mitternacht steht
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        # Zeit ist bereits Mitternacht, gib den ursprünglichen Timestamp zurück
+        unix_timestamp_midnight = int(timestamp_in_seconds)
+    else:
+        # Zeit ist nicht Mitternacht, setze auf 00:00:00
+        dt_midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        unix_timestamp_midnight = int(dt_midnight.timestamp())
+
+
+    return unix_timestamp_midnight
+
 
 # Funktion zum Herunterladen der JSON-Daten und Speichern in die Datenbank
-def download_and_store_data(url, db_name):
-    response = requests.get(url)
+def get_player_ids():
+    response = requests.get(url_index)
     data = response.json()
-    
-    conn = sqlite3.connect(db_name)
-    cursor = conn.cursor()
-    
+
     # Daten in die Tabelle einfügen
     for player_id, player_name in data.items():
-        cursor.execute('''
-            INSERT OR IGNORE INTO players (id, name)
-            VALUES (?, ?)
-        ''', (int(player_id), player_name))
-    
-    conn.commit()
-    conn.close()
 
-# Funktion zum Überprüfen, ob das Profil eines Spielers bereits gespeichert ist
-def profile_exists(cursor, player_id):
-    cursor.execute("SELECT 1 FROM player_profiles WHERE id = ?", (player_id,))
-    return cursor.fetchone() is not None
+        accountId = player_id
+        name = player_name
+
+        try:
+            cursor.execute('''
+                INSERT INTO player (accountId, name)
+                VALUES (?, ?)
+            ''', (accountId, name))
+            print(f"Player {player_id} successfully added.")
+        except sqlite3.IntegrityError:
+            pass
+    conn.commit()
 
 # Funktion zum Herunterladen und Speichern der Spielerprofile
-def fetch_and_store_profiles(db_name):
-    conn = sqlite3.connect(db_name)
-    cursor = conn.cursor()
+def update_profiles():
     
-    cursor.execute("SELECT id FROM players")
-    player_ids = cursor.fetchall()
-    
-    for (player_id,) in player_ids:
-        if profile_exists(cursor, player_id):
-            print(f"Profil für Spieler {player_id} existiert bereits, überspringe...")
-            continue
+    cursor.execute("SELECT accountId FROM player")
+    accountIds = cursor.fetchall()
+
+    # Erstellen einer Hilfsfunktion zum Extrahieren von Statistiken
+    def get_stat(stats, keys):
+        try:
+            for item in stats:
+                if item['Key'] == keys:
+                    return item['Value']
+            return 0
+        except TypeError: # Wenn stats None ist
+            return 0
         
-        profile_url = f"https://players.tarkov.dev/profile/{player_id}.json"
+
+    counter_h = 0
+    for index, (accountId,) in enumerate(accountIds):
+
+        counter_h += 1
+        if counter_h == 100:
+            print(index)
+            conn.commit()
+            counter_h = 0
+        if index < 446900:
+            continue
+
+
+        profile_url = f"https://players.tarkov.dev/profile/{accountId}.json"
         
         try:
             response = requests.get(profile_url, headers={"Accept-Encoding": "identity"})
         except requests.exceptions.RequestException as e:
-            print(f"Fehler beim Abrufen des Profils für Spieler {player_id}: {e}")
+            print(f"Fehler beim Abrufen des Profils für Spieler {accountId}: {e}")
             continue
         
         if response.status_code == 200:
@@ -108,73 +106,110 @@ def fetch_and_store_profiles(db_name):
                 profile_data = response.json()
 
             except (zlib.error, ValueError) as e:
-                print(f"Fehler beim Dekomprimieren oder Dekodieren der Daten für Spieler {player_id}: {e}")
+                print(f"Fehler beim Dekomprimieren oder Dekodieren der Daten für Spieler {accountId}: {e}")
+                continue
+            
+            # add Query
+            updated = profile_data.get('updated')
+            date = get_timestamp_ms_to_s(updated)
+            queryId = get_timestamp_ms_to_s(updated)
+            try:
+                cursor.execute('''
+                    INSERT INTO query (id, date)
+                    VALUES (?, ?)
+                ''', (queryId, date))
+            except sqlite3.IntegrityError:
+                pass
+
+            # suche ob Plyer bereits ein PMC mit dieser QueryId hat
+            cursor.execute('''
+                SELECT * FROM pmc
+                WHERE accountId = ? AND queryId = ?
+            ''', (accountId, queryId))
+            pmc = cursor.fetchone()
+
+            if pmc is not None:
+                print(f"Profil mit Query {queryId} für Spieler {accountId} bereits vorhanden.")
                 continue
 
+            #update Player
+            is_banned = profile_data.get('isBanned')  # Abfragen des Bannstatus
+            try:
+                try:
+                    cursor.execute('''
+                        UPDATE player
+                        SET banned = ?
+                        WHERE accountId = ?
+                    ''',  (int(is_banned), accountId))
+                except TypeError:
+                    pass
+            except sqlite3.IntegrityError:
+                pass
+
+
+            # add PMC
             info = profile_data.get('info', {})
             pmc_stats = profile_data.get('pmcStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
-            scav_stats = profile_data.get('scavStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
-            achievements = profile_data.get('achievements', {})
-            is_banned = profile_data.get('isBanned', False)  # Abfragen des Bannstatus
-
-            # Erstellen einer Hilfsfunktion zum Extrahieren von Statistiken
-            def get_stat(stats, keys):
-                try:
-                    for item in stats:
-                        if item['Key'] == keys:
-                            return item['Value']
-                    return None
-                except TypeError: # Wenn stats None ist
-                    return None
-
-            # Einträge extrahieren oder auf None setzen, wenn sie nicht existieren
-            nickname = info.get('nickname')
-            side = info.get('side')
+            totalInGameTime = profile_data.get('pmcStats', {}).get('eft', {}).get('totalInGameTime')
+            pmcId = f'{accountId}_{queryId}_{totalInGameTime}'
+            #nickname = info.get('nickname')
+            #side = info.get('side')
             experience = info.get('experience')
-            member_category = info.get('memberCategory')
-            selected_member_category = info.get('selectedMemberCategory')
-            achievements_count = len(achievements) if achievements is not None else 0
-            total_game_time = profile_data.get('pmcStats', {}).get('eft', {}).get('totalInGameTime')
-            sessions_pmc = get_stat(pmc_stats, ['Sessions', 'Pmc'])
-            sessions_scav = get_stat(scav_stats, ['Sessions', 'Scav'])
-            kills_pmc = get_stat(pmc_stats, ['Kills'])
-            kills_scav = get_stat(scav_stats, ['Kills'])
-            deaths_pmc = get_stat(pmc_stats, ['Deaths'])
-            deaths_scav = get_stat(scav_stats, ['Deaths'])
-            survived_pmc = get_stat(pmc_stats, ['ExitStatus', 'Survived', 'Pmc'])
-            survived_scav = get_stat(scav_stats, ['ExitStatus', 'Survived', 'Scav'])
-            longest_win_streak_pmc = get_stat(pmc_stats, ['LongestWinStreak', 'Pmc'])
-            longest_win_streak_scav = get_stat(scav_stats, ['LongestWinStreak', 'Scav'])
-            updated = profile_data.get('updated')
-
-            # Daten in die Tabelle einfügen
-            cursor.execute('''
-                INSERT OR REPLACE INTO player_profiles (
-                    id, nickname, side, experience, member_category, selected_member_category, achievements_count,
-                    total_game_time, sessions_pmc, sessions_scav, kills_pmc, kills_scav, deaths_pmc, deaths_scav,
-                    survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated, is_banned
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                player_id, nickname, side, experience, member_category, selected_member_category, achievements_count,
-                total_game_time, sessions_pmc, sessions_scav, kills_pmc, kills_scav, deaths_pmc, deaths_scav,
-                survived_pmc, survived_scav, longest_win_streak_pmc, longest_win_streak_scav, updated, is_banned
-            ))
+            #member_category = info.get('memberCategory')
+            #selected_member_category = info.get('selectedMemberCategory')
+            #achievements_count = len(achievements) if achievements is not None else 0
             
-            conn.commit()
-            print(f"Profil für Spieler {player_id} erfolgreich gespeichert.")
+            pmc_runs = get_stat(pmc_stats, ['Sessions', 'Pmc'])
+            pmc_kills = get_stat(pmc_stats, ['Kills'])
+            pmc_deaths = get_stat(pmc_stats, ['Deaths'])
+            pmc_survivedRuns = get_stat(pmc_stats, ['ExitStatus', 'Survived', 'Pmc'])
+            pmc_longestWinStreak = get_stat(pmc_stats, ['LongestWinStreak', 'Pmc'])
+            pmc_missingInAction= get_stat(pmc_stats, ['MissingInAction', 'Pmc'])
+            pmc_runThroughs = get_stat(pmc_stats, ['Runner', 'Pmc'])
+            registrationDate = 0
+
+            try:
+                cursor.execute('''
+                    INSERT INTO pmc (id, accountId, experience, registrationDate, runThrough, missingInAction, longestWinStreak, survivedRuns, deaths, kills, runs, queryId, totalInGameTime)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (pmcId, accountId, experience, registrationDate, pmc_runThroughs, pmc_missingInAction, pmc_longestWinStreak, pmc_survivedRuns, pmc_deaths, pmc_kills, pmc_runs, queryId, totalInGameTime))
+            except sqlite3.IntegrityError:
+                pass
+            
+            # add SCAV
+            scav_stats = profile_data.get('scavStats', {}).get('eft', {}).get('overAllCounters', {}).get('Items', [])
+            scavId = f'{accountId}_{queryId}_{totalInGameTime}'
+            scav_runs = get_stat(scav_stats, ['Sessions', 'Scav'])
+            scav_kills = get_stat(scav_stats, ['Kills'])
+            scav_deaths = get_stat(scav_stats, ['Deaths'])
+            scav_survivedRuns = get_stat(scav_stats, ['ExitStatus', 'Survived', 'Scav'])
+            scav_longestWinStreak = get_stat(scav_stats, ['LongestWinStreak', 'Scav'])
+            scav_missingInAction = get_stat(scav_stats, ['MissingInAction', 'Scav'])
+#
+            try:
+                cursor.execute('''
+                    INSERT INTO scav (id, missingInAction, longestWinStreak, survivedRuns, deaths, kills, runs, queryId, accountId)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (scavId, scav_missingInAction, scav_longestWinStreak, scav_survivedRuns, scav_deaths, scav_kills, scav_runs, queryId, accountId))
+
+            # Änderungen speichern und Verbindung schließen
+            except sqlite3.IntegrityError:
+                pass
+
         else:
-            print(f"Fehler beim Abrufen des Profils für Spieler {player_id}. HTTP-Status: {response.status_code}")
-    
+            print(f"Fehler beim Abrufen des Profils für Spieler {accountId}. HTTP-Status: {response.status_code}")
+
+    conn.commit()    
     conn.close()
 
-# Überprüfen, ob die Datenbank existiert, wenn nicht, wird sie erstellt
-if not os.path.exists(db_name):
-    create_database(db_name)
 
-# JSON-Daten herunterladen und speichern
-# download_and_store_data(url_index, db_name)
 
-# Spielerprofile abrufen und speichern
-fetch_and_store_profiles(db_name)
 
-print("Spielerprofile erfolgreich heruntergeladen und in der Datenbank gespeichert.")
+if __name__ == "__main__":
+    # JSON-Daten herunterladen und speichern
+    get_player_ids()
+    ctypes.windll.kernel32.SetThreadExecutionState(0x80000002)
+    # Spielerprofile abrufen und speichern
+    update_profiles()
+
+    print("Spielerprofile erfolgreich heruntergeladen und in der Datenbank gespeichert.")
